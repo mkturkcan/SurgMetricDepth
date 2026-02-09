@@ -5,9 +5,15 @@ IMAGE_PATH   = "sample.png"       # or a .mp4/.avi → grabs one frame
 FRAME_INDEX  = 0                          # which frame (ignored for images)
 INTRINSIC    = [391.0, 391.0, 320.0, 240.0]  # [fx, fy, cx, cy]
 
-MODEL_NAME   = "metric3d_vit_small"       # hub model name
+# ── Model presets (uncomment one) ──
+# ViT-Small fine-tuned on Hamlyn  (download: https://huggingface.co/mehmetkeremturkcan/SurgMetricDepth/resolve/main/Metric3D_hamlyn.pth)
+MODEL_NAME, CHECKPOINT = "metric3d_vit_small", "Metric3D_hamlyn.pth"
+# ViT-Small pretrained (no fine-tune)
+# MODEL_NAME, CHECKPOINT = "metric3d_vit_small", None
+# ViT-Giant2 pretrained (no fine-tune)
+# MODEL_NAME, CHECKPOINT = "metric3d_vit_giant2", None
+
 REPO         = "yvanyin/metric3d"         # torch.hub repo
-CHECKPOINT   = 'scene_reconstruction_Metric3D_ckpt_hamlyn_20250513_epoch8.pth'                       # .pth path or None for pretrained
 
 GLOBAL_SCALE = 0.05 #1.0                        # multiplier on output depth
 SAVE_PATH    = "depth_output.png"         # set to None to just display

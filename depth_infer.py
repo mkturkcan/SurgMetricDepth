@@ -73,6 +73,44 @@ def load_image(path: str, frame_index: int = 0) -> np.ndarray:
         return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
+# ── 2b. Cropping ───────────────────────────────────────────────────────────
+
+def crop_frame(
+    rgb: np.ndarray,
+    crop_pct: list[float],
+    intrinsic: list[float],
+) -> tuple[np.ndarray, list[float]]:
+    """
+    Center-crop an image by removing a percentage from each edge and adjust
+    the camera intrinsics accordingly.
+
+    Parameters
+    ----------
+    rgb       : (H, W, 3) uint8 RGB image
+    crop_pct  : [top%, bottom%, left%, right%]  – each value in 0-100
+    intrinsic : [fx, fy, cx, cy]
+
+    Returns
+    -------
+    cropped   : (H', W', 3) uint8 RGB image
+    intrinsic : [fx, fy, cx', cy'] with principal point shifted
+    """
+    h, w = rgb.shape[:2]
+    top    = int(h * crop_pct[0] / 100.0)
+    bottom = int(h * crop_pct[1] / 100.0)
+    left   = int(w * crop_pct[2] / 100.0)
+    right  = int(w * crop_pct[3] / 100.0)
+
+    cropped = rgb[top : h - bottom if bottom > 0 else h,
+                  left: w - right  if right  > 0 else w]
+
+    # fx, fy unchanged; shift principal point by the crop offset
+    fx, fy, cx, cy = intrinsic
+    intrinsic_cropped = [fx, fy, cx - left, cy - top]
+
+    return cropped, intrinsic_cropped
+
+
 # ── 3. Metric3D pre/post-processing (matches hubconf.py exactly) ────────────
 
 _IMAGENET_MEAN = torch.tensor([123.675, 116.28, 103.53]).float()[:, None, None]
@@ -216,7 +254,119 @@ def infer_depth(
     return depth
 
 
-# ── 5. Visualisation ─────────────────────────────────────────────────────────
+# ── 5. Video inference ────────────────────────────────────────────────────────
+
+def infer_video(
+    model: torch.nn.Module,
+    video_path: str,
+    intrinsic: list[float],
+    output_path: str = "depth_video.mp4",
+    crop_pct: list[float] | None = None,
+    global_scale: float = 1.0,
+    output_fps: float | None = None,
+    temporal_alpha: float = 0.4,
+    input_size: tuple[int, int] = (616, 1064),
+    cmap: int = cv2.COLORMAP_INFERNO,
+    device: torch.device = DEVICE,
+) -> str:
+    """
+    Run depth inference on every frame of a video and write a side-by-side
+    (RGB | depth-colourmap) output video.
+
+    Parameters
+    ----------
+    model          : loaded Metric3D model (eval mode)
+    video_path     : path to input video
+    intrinsic      : [fx, fy, cx, cy] for the *original* (uncropped) frames
+    output_path    : where to write the result video
+    crop_pct       : optional [top%, bottom%, left%, right%] centre-crop
+    global_scale   : multiplicative factor on output depth
+    output_fps     : FPS for the output video.  None = match the input video's FPS.
+                     Useful when the input is e.g. 1 FPS and you want 30 FPS output.
+    temporal_alpha : EMA smoothing weight in (0, 1].
+                     1.0 = no smoothing (raw per-frame depth).
+                     Lower values = heavier smoothing across frames.
+                     Blends as: smoothed = alpha * current + (1-alpha) * previous.
+    input_size     : network input resolution
+    cmap           : OpenCV colourmap for depth rendering
+    device         : torch device
+
+    Returns
+    -------
+    output_path : the path to the written video
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+
+    fps = output_fps or cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Read one frame to determine output dimensions after crop
+    ok, first_bgr = cap.read()
+    if not ok:
+        raise RuntimeError(f"Cannot read first frame from {video_path}")
+    first_rgb = cv2.cvtColor(first_bgr, cv2.COLOR_BGR2RGB)
+
+    if crop_pct is not None:
+        first_rgb, _ = crop_frame(first_rgb, crop_pct, intrinsic)
+
+    out_h, out_w = first_rgb.shape[:2]
+    # Side-by-side: [RGB | depth colourmap]
+    writer = cv2.VideoWriter(
+        output_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (out_w * 2, out_h),
+    )
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # rewind
+
+    smoothed_depth = None
+    frame_idx = 0
+
+    while True:
+        ok, bgr = cap.read()
+        if not ok:
+            break
+
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        intr = list(intrinsic)  # copy so crop doesn't mutate
+
+        if crop_pct is not None:
+            rgb, intr = crop_frame(rgb, crop_pct, intr)
+
+        depth = infer_depth(model, rgb, intr, global_scale=global_scale,
+                            input_size=input_size, device=device)
+
+        # ── temporal EMA smoothing ──
+        if smoothed_depth is None or temporal_alpha >= 1.0:
+            smoothed_depth = depth.copy()
+        else:
+            smoothed_depth = temporal_alpha * depth + (1.0 - temporal_alpha) * smoothed_depth
+
+        # ── render depth colourmap ──
+        valid = smoothed_depth[smoothed_depth > 0]
+        vmax = float(np.percentile(valid, 95)) if valid.size else 1.0
+        depth_norm = np.clip(smoothed_depth / vmax, 0, 1)
+        depth_u8 = (depth_norm * 255).astype(np.uint8)
+        depth_colour = cv2.applyColorMap(depth_u8, cmap)  # BGR
+        rgb_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+        side_by_side = np.concatenate([rgb_bgr, depth_colour], axis=1)
+        writer.write(side_by_side)
+
+        frame_idx += 1
+        if frame_idx % 50 == 0 or frame_idx == total:
+            print(f"  Frame {frame_idx}/{total}")
+
+    cap.release()
+    writer.release()
+    print(f"✓ Video saved → {output_path}  ({frame_idx} frames)")
+    return output_path
+
+
+# ── 6. Visualisation ─────────────────────────────────────────────────────────
 
 def visualize_4panel(
     rgb: np.ndarray,
