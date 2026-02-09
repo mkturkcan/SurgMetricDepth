@@ -1,4 +1,8 @@
+import os
+import urllib.request
 from depth_infer import load_model, infer_video
+
+HF_CHECKPOINT_URL = "https://huggingface.co/mehmetkeremturkcan/SurgMetricDepth/resolve/main/Metric3D_hamlyn.pth"
 
 # ━━━━━━━━━━━  CONFIGURATION (edit these)  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VIDEO_PATH     = "surgery.mp4"            # input video file
@@ -21,10 +25,16 @@ CROP_PCT       = [0, 0, 0, 0]            # [top%, bottom%, left%, right%] to cro
 TEMPORAL_ALPHA = 0.4                      # EMA smoothing: 1.0 = none, lower = smoother
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# 1) Load model
+# 1) Download checkpoint if needed
+if CHECKPOINT and not os.path.exists(CHECKPOINT):
+    print(f"Checkpoint not found, downloading {CHECKPOINT} ...")
+    urllib.request.urlretrieve(HF_CHECKPOINT_URL, CHECKPOINT)
+    print(f"✓ Downloaded → {CHECKPOINT}")
+
+# 2) Load model
 model = load_model(MODEL_NAME, REPO, CHECKPOINT)
 
-# 2) Run video depth inference
+# 3) Run video depth inference
 infer_video(
     model, VIDEO_PATH, INTRINSIC,
     output_path=VIDEO_OUTPUT,

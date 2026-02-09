@@ -1,4 +1,8 @@
+import os
+import urllib.request
 from depth_infer import load_model, load_image, infer_depth, visualize_4panel
+
+HF_CHECKPOINT_URL = "https://huggingface.co/mehmetkeremturkcan/SurgMetricDepth/resolve/main/Metric3D_hamlyn.pth"
 
 # ━━━━━━━━━━━  CONFIGURATION (edit these)  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IMAGE_PATH   = "sample.png"       # or a .mp4/.avi → grabs one frame
@@ -19,17 +23,23 @@ GLOBAL_SCALE = 0.05 #1.0                        # multiplier on output depth
 SAVE_PATH    = "depth_output.png"         # set to None to just display
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# 1) Load model
+# 1) Download checkpoint if needed
+if CHECKPOINT and not os.path.exists(CHECKPOINT):
+    print(f"Checkpoint not found, downloading {CHECKPOINT} ...")
+    urllib.request.urlretrieve(HF_CHECKPOINT_URL, CHECKPOINT)
+    print(f"✓ Downloaded → {CHECKPOINT}")
+
+# 2) Load model
 model = load_model(MODEL_NAME, REPO, CHECKPOINT)
 
-# 2) Load image (or video frame)
+# 3) Load image (or video frame)
 rgb = load_image(IMAGE_PATH, frame_index=FRAME_INDEX)
 print(f"Image shape: {rgb.shape}")
 
-# 3) Run depth estimation
+# 4) Run depth estimation
 depth = infer_depth(model, rgb, INTRINSIC, global_scale=GLOBAL_SCALE)
 print(f"Depth range: {depth[depth>0].min():.3f} – {depth.max():.3f} m")
 
-# 4) Visualise
+# 5) Visualise
 fig = visualize_4panel(rgb, depth, save_path=SAVE_PATH, title="Metric3D Depth")
 fig  # display in notebook
